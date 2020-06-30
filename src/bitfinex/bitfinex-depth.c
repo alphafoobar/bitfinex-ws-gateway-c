@@ -1,5 +1,4 @@
 #include <math.h>
-#include <stdbool.h>
 
 #include "bitfinex-depth.h"
 
@@ -10,16 +9,16 @@ static int bitfinex_channel_id = 0;
 static int bitfinex_count = 0;
 
 bool
-fp_equals(double a, double b, double epsilon);
+remove_level(Order levels[MAX_ORDER_LEVELS], size_t length, double price);
 
 bool
-remove_level(Order levels[25], size_t length, double price);
+insert_bid_level(Order levels[MAX_ORDER_LEVELS], size_t length, double price, double amount);
 
 bool
-insert_bid_level(Order levels[MAX_ORDER_LEVELS], size_t length, Order level);
+insert_ask_level(Order orders[MAX_ORDER_LEVELS], size_t length, double price, double amount);
 
-bool
-insert_ask_level(Order orders[MAX_ORDER_LEVELS], size_t length, Order level);
+void
+_assign_level(Order *left, Order *right);
 
 OrderBookLevel2 *
 bitfinex_parse_depth_update(const char *json_string, OrderBookLevel2 *order_book) {
@@ -103,29 +102,31 @@ bitfinex_parse_depth_update(const char *json_string, OrderBookLevel2 *order_book
         // Then this is a snapshot event.
         order_book->bids_length = 0;
         order_book->asks_length = 0;
+
         cJSON_ArrayForEach(order_node, first_element) {
             cJSON *price = cJSON_GetArrayItem(order_node, 0);
             cJSON *count = cJSON_GetArrayItem(order_node, 1);
             cJSON *amount = cJSON_GetArrayItem(order_node, 2);
 
-            if (amount->valuedouble > 0) {
+            if (amount->valuedouble > 0.0) {
                 if (order_book->bids_length < MAX_ORDER_LEVELS) {
-                    Order book = {
-                            .price=price->valuedouble,
-                            .amount=count->valueint == 0 ? 0.0 : fabs(amount->valuedouble),
-                    };
-                    order_book->bids[order_book->bids_length++] = book;
+                    order_book->bids[order_book->bids_length].price = price->valuedouble;
+                    order_book->bids[order_book->bids_length].amount = amount->valuedouble;
+                    order_book->bids_length++;
+                }
+            } else if (amount->valuedouble < 0) {
+                if (order_book->asks_length < MAX_ORDER_LEVELS) {
+                    order_book->asks[order_book->asks_length].price = price->valuedouble;
+                    order_book->asks[order_book->asks_length].amount = fabs(amount->valuedouble);
+                    order_book->asks_length++;
                 }
             } else {
-                if (order_book->asks_length < MAX_ORDER_LEVELS) {
-                    Order book = {
-                            .price=price->valuedouble,
-                            .amount=count->valueint == 0 ? 0.0 : fabs(amount->valuedouble)
-                    };
-                    order_book->asks[order_book->asks_length++] = book;
-                }
+                lwsl_warn("%s: Unexpected value in SNAPSHOT price=%f, count=%d, amount=%f\n", __func__,
+                          price->valuedouble,
+                          count->valueint, amount->valuedouble);
             }
         }
+
         order_book_calculate_mid(order_book);
     } else {
         // This is an update event.
@@ -145,18 +146,10 @@ bitfinex_parse_depth_update(const char *json_string, OrderBookLevel2 *order_book
             if (fp_equals(amount->valuedouble, 1, FP_EPSILON)) {
                 if (remove_level(order_book->bids, order_book->bids_length, price->valuedouble)) {
                     order_book->bids_length--;
-                } else {
-                    lwsl_debug("%s: Unable to FIND BID price to remove price=%f, count=%d, amount=%f\n", __func__,
-                               price->valuedouble,
-                               count->valueint, amount->valuedouble);
                 }
             } else if (fp_equals(amount->valuedouble, -1, FP_EPSILON)) {
                 if (remove_level(order_book->asks, order_book->asks_length, price->valuedouble)) {
                     order_book->asks_length--;
-                } else {
-                    lwsl_debug("%s: Unable to FIND ASK price to remove price=%f, count=%d, amount=%f\n", __func__,
-                               price->valuedouble,
-                               count->valueint, amount->valuedouble);
                 }
             } else {
                 lwsl_warn("%s: Unexpected value to remove price=%f, count=%d, amount=%f\n", __func__,
@@ -164,15 +157,20 @@ bitfinex_parse_depth_update(const char *json_string, OrderBookLevel2 *order_book
                           count->valueint, amount->valuedouble);
             }
         } else if (amount->valuedouble > 0) {
-            Order book = {.price=price->valuedouble, .amount=fabs(amount->valuedouble)};
-            if (insert_bid_level(order_book->bids, order_book->bids_length, book) && order_book->bids_length < MAX_ORDER_LEVELS) {
+            if (insert_bid_level(order_book->bids, order_book->bids_length, price->valuedouble, amount->valuedouble) &&
+                order_book->bids_length < MAX_ORDER_LEVELS) {
                 order_book->bids_length++;
             }
-        } else {
-            Order book = {.price=price->valuedouble, .amount=fabs(amount->valuedouble)};
-            if (insert_ask_level(order_book->asks, order_book->asks_length, book) && order_book->asks_length < MAX_ORDER_LEVELS) {
+        } else if (amount->valuedouble < 0) {
+            if (insert_ask_level(order_book->asks, order_book->asks_length, price->valuedouble,
+                                 fabs(amount->valuedouble)) &&
+                order_book->asks_length < MAX_ORDER_LEVELS) {
                 order_book->asks_length++;
             }
+        } else {
+            lwsl_warn("%s: Unexpected value in UPDATE price=%f, count=%d, amount=%f\n", __func__,
+                      price->valuedouble,
+                      count->valueint, amount->valuedouble);
         }
 
         order_book_calculate_mid(order_book);
@@ -187,50 +185,66 @@ bitfinex_parse_depth_update(const char *json_string, OrderBookLevel2 *order_book
     return order_book;
 }
 
+void
+_assign_level(Order *left, Order *right) {
+    (*left).price = (*right).price;
+    (*left).amount = (*right).amount;
+}
+
 bool
-insert_ask_level(Order levels[MAX_ORDER_LEVELS], size_t length, Order level) {
+insert_ask_level(Order levels[MAX_ORDER_LEVELS], size_t length, double price, double amount) {
     size_t i = 0;
     bool inserted = false;
-    Order to_insert = level;
+    Order to_insert = {.price=price, .amount=amount};
+    Order temp = {.price=price, .amount=amount};
     for (; i < length && i < MAX_ORDER_LEVELS; i++) {
         if (inserted || levels[i].price > to_insert.price) {
             // Replace all levels with the next one. Once we inserted what we are looking for.
-            Order temp = to_insert;
-            to_insert = levels[i];
-            levels[i] = temp;
+            _assign_level(&temp, &to_insert);
+            _assign_level(&to_insert, &levels[i]);
+            _assign_level(&levels[i], &temp);
             inserted = true;
         } else if (fp_equals(levels[i].price, to_insert.price, FP_EPSILON)) {
-            levels[i] = to_insert;
+            _assign_level(&levels[i], &to_insert);
             return false;
         }
     }
-    if (!inserted && i < MAX_ORDER_LEVELS) {
-        levels[i] = to_insert;
+    if (i < MAX_ORDER_LEVELS) {
+        _assign_level(&levels[i], &to_insert);
         inserted = true;
+    }
+    if (!inserted) {
+        lwsl_warn("%s: Unable to find price to update price=%f, amount=%f, length=%ld\n", __func__, price, amount,
+                  length);
     }
     return inserted;
 }
 
 bool
-insert_bid_level(Order levels[MAX_ORDER_LEVELS], size_t length, Order level) {
+insert_bid_level(Order levels[MAX_ORDER_LEVELS], size_t length, double price, double amount) {
     size_t i = 0;
     bool inserted = false;
-    Order to_insert = level;
+    Order to_insert = {.price=price, .amount=amount};
+    Order temp = {.price=price, .amount=amount};
     for (; i < length && i < MAX_ORDER_LEVELS; i++) {
         if (inserted || levels[i].price < to_insert.price) {
             // Replace all levels with the next one. Once we inserted what we are looking for.
-            Order temp = to_insert;
-            to_insert = levels[i];
-            levels[i] = temp;
+            _assign_level(&temp, &to_insert);
+            _assign_level(&to_insert, &levels[i]);
+            _assign_level(&levels[i], &temp);
             inserted = true;
         } else if (fp_equals(levels[i].price, to_insert.price, FP_EPSILON)) {
-            levels[i] = to_insert;
+            _assign_level(&levels[i], &to_insert);
             return false;
         }
     }
-    if (!inserted && i < MAX_ORDER_LEVELS) {
-        levels[i] = to_insert;
+    if (i < MAX_ORDER_LEVELS) {
+        _assign_level(&levels[i], &to_insert);
         inserted = true;
+    }
+    if (!inserted) {
+        lwsl_warn("%s: Unable to find price to update price=%f, amount=%f, length=%ld\n", __func__, price, amount,
+                  length);
     }
     return inserted;
 }
@@ -241,22 +255,27 @@ fp_equals(double a, double b, double epsilon) {
         return true;
     }
     if (a < b) {
-        return (b - a) < epsilon;
+        return (b - a) <= epsilon;
     }
-    return (a - b) < epsilon;
+    return (a - b) <= epsilon;
 }
 
 bool
-remove_level(Order levels[25], size_t length, double price) {
+remove_level(Order levels[MAX_ORDER_LEVELS], size_t length, double price) {
     bool found = false;
     for (size_t i = 0; i < length && i < MAX_ORDER_LEVELS; i++) {
         if (found || fp_equals(levels[i].price, price, FP_EPSILON)) {
             // Replace all levels with the next one. Once we found what we are looking for.
-            if (i + 1 < length) {
-                levels[i] = levels[i + 1];
+            if (i + 1 < MAX_ORDER_LEVELS) {
+                _assign_level(levels + i, levels + i + 1);
+            } else {
+                _assign_level(levels + i, &EMPTY_ORDER);
             }
             found = true;
         }
+    }
+    if (!found) {
+        lwsl_warn("%s: Unable to find price to remove price=%.1f\n", __func__, price);
     }
     return found;
 }

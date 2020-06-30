@@ -17,8 +17,8 @@ websocket_write_back(struct lws *wsi_in, const char *str);
                 "default", \
                 callback_minimal, \
                 sizeof(struct per_session_data__minimal), \
-                10240, \
-                1000, \
+                2048, \
+                100, \
                 NULL, \
                 0 \
         }

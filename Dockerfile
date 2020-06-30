@@ -21,7 +21,7 @@ EXPOSE 7681
 
 ENTRYPOINT exec ./bitfinex-gateway
 
-HEALTHCHECK --start-period=5s \
+HEALTHCHECK --interval=10s --timeout=2s --start-period=5s \
   CMD curl --silent --fail --max-time 30 http://localhost:7681/ping.html || exit 1
 
 COPY --from=builder /usr/src/app/build/src/bitfinex-gateway .

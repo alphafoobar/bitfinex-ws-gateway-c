@@ -27,3 +27,12 @@ add_cmocka_test(test_bitfinex_depth
         LINK_LIBRARIES ${TEST_LIBS}
         LINK_OPTIONS --coverage)
 
+add_cmocka_test(test_fp_equals
+        SOURCES
+        ${PROJECT_SOURCE_DIR}/test/bitfinex/test-fp-equals.c
+        ${PROJECT_SOURCE_DIR}/src/bitfinex/bitfinex-depth.c
+        ${PROJECT_SOURCE_DIR}/src/bitfinex/bitfinex-depth.h
+        ${COMMON_SOURCES}
+        LINK_LIBRARIES ${TEST_LIBS}
+        LINK_OPTIONS --coverage)
+

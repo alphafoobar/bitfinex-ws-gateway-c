@@ -10,7 +10,7 @@ typedef struct order {
 #define EMPTY_ORDER (Order){.price=-1.0, .amount=-1.0}
 #endif //EMPTY_ORDER
 
-#define MAX_ORDER_LEVELS 25
+#define MAX_ORDER_LEVELS 50
 
 typedef struct {
     char *exchange;

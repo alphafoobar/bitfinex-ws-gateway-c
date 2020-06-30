@@ -17,14 +17,21 @@ bitfinex_subscribe(struct lws *wsi_in) {
     websocket_write_back(wsi_in, m);
 }
 
-static OrderBookLevel2 _order_book;
+static OrderBookLevel2 _order_book = {
+        .exchange = "bitfinex",
+        .market_name = "btc/usd",
+        .bids_length = 0,
+        .asks_length = 0,
+        .bids = {},
+        .asks = {},
+};
 static char _message[200];
-        
+
 static char *
 bitfinex_parse(const char *const json_string) {
     OrderBookLevel2 *book = bitfinex_parse_depth_update(json_string, &_order_book);
     if (book != NULL) {
-        sprintf(_message, "{\"e\":\"bitfinex\",\"s\":\"btc/usd\",\"b\":%f,\"m\":%f,\"a\":%f,\"t\":%f,\"i\":%ld}",
+        sprintf(_message, "{\"e\":\"bitfinex\",\"s\":\"btc/usd\",\"b\":%.1f,\"m\":%.3f,\"a\":%.1f,\"t\":%f,\"i\":%ld}",
                 book->bids[0].price,
                 book->mid,
                 book->asks[0].price,
@@ -38,8 +45,14 @@ bitfinex_parse(const char *const json_string) {
 
 int
 bitfinex_connect_client(const struct per_vhost_data__minimal *vhd) {
-    _order_book.exchange = strndup("bitfinex", 20);
-    _order_book.market_name = strndup("btc/usd", 20);
+    for (int i = 0; i < MAX_ORDER_LEVELS; i++) {
+        Order order = {.price=-1.0, .amount=-1.0};
+        _order_book.bids[i] = order;
+    }
+    for (int i = 0; i < MAX_ORDER_LEVELS; i++) {
+        Order order = {.price=-1.0, .amount=-1.0};
+        _order_book.asks[i] = order;
+    }
 
     struct client_user_data *userdata = malloc(sizeof(struct client_user_data));
     userdata->name = "bitfinex";
